@@ -1,0 +1,360 @@
+{
+  "metadata": {
+    "title": "Paytently FinOps Ledger — Chart of Accounts",
+    "description": "Complete catalogue of every account/role the ledger tracks, who owns it, its accounting type and its safeguarding classification. Intended as the reference/seed data for the finops-ledger-seeder.",
+    "generatedAt": "2026-10-22",
+    "sources": [
+      {
+        "name": "account-management.md",
+        "path": "/wks/paytently/finops/account-management.md",
+        "role": "Business requirements: account definitions, descriptions, safeguarding, licensing, account data points, close/immutability rules."
+      },
+      {
+        "name": "finops-accounts-api",
+        "path": "/wks/paytently/finops/finops-accounts-api",
+        "role": "Source of truth for the implemented model: enums (OwnerType, RoleName, Type, Status), owner-to-role mapping (AccountExtensions.cs), role id format, create request shape."
+      },
+      {
+        "name": "finops-ledger-api",
+        "path": "/wks/paytently/finops/finops-ledger-api",
+        "role": "Consumer of accounts/roles for ledger movements."
+      }
+    ],
+    "notes": [
+      "An 'account' is created per (ownerType, ownerId, currency, safeguarded). Each account automatically exposes a fixed SET of roles derived from its ownerType and safeguarded flag (see ownerTypes[].variants[].roles).",
+      "Each account holds its balance in a single currency; all ledger movements affecting it must use that same settlement currency.",
+      "The business spec lists the roles marked 'inSpec': true. Roles with 'inSpec': false exist in the implemented code model only (e.g. the non-safeguarded entity variant and the channel-clearing split)."
+    ]
+  },
+
+  "enums": {
+    "ownerType": ["Entity", "Channel", "Connector", "Introducer", "Paytently"],
+    "accountType": ["Asset", "Liability", "Revenue"],
+    "accountClass": ["Safeguarded", "NotSafeguarded"],
+    "status": ["Active", "Closed"],
+    "license": {
+      "values": ["Paytently PI Ltd", "Paytently Ltd"],
+      "nullable": true,
+      "appliesTo": "Entity accounts only. Accounts inherit the license of the Entity they belong to. Null for all non-Entity owner types.",
+      "codeConstants": {
+        "paytentlyLimited": "paytently_ltd"
+      }
+    }
+  },
+
+  "roleIdFormat": {
+    "pattern": "{ownerId}:{accountId}:{currency}:{roleNameSnakeCase}",
+    "example": "ent_123:acc_456:EUR:merchant_available",
+    "source": "finops-accounts-api AccountExtensions.BuildRole"
+  },
+
+  "accountSchema": {
+    "description": "Data points stored for every account (account-management.md — 'Account data'). All immutable after creation except accountName.",
+    "fields": [
+      { "name": "accountName", "type": "string", "editable": true, "description": "Human-legible name for the account." },
+      { "name": "currency", "type": "string (ISO 4217)", "editable": false, "description": "Currency of the funds represented by this account." },
+      { "name": "balance", "type": "money", "editable": false, "description": "Current balance of the funds represented by this account (derived from ledger movements)." },
+      { "name": "ownerType", "type": "enum ownerType", "editable": false, "description": "Entity | Channel | Paytently | Connector | Introducer." },
+      { "name": "ownerName", "type": "string", "editable": false, "description": "Actual name of the owner, e.g. for ownerType Entity: 'Transactworld Ltd'." },
+      { "name": "license", "type": "enum license (nullable)", "editable": false, "description": "Paytently license this account relates to. Nullable; applies to Entity accounts only, inherited from the entity." },
+      { "name": "accountType", "type": "enum accountType", "editable": false, "description": "Asset | Liability | Revenue (extensible)." },
+      { "name": "accountClass", "type": "enum accountClass", "editable": false, "description": "Safeguarded or NotSafeguarded." },
+      { "name": "safeguardedClientFundAccountIdentifier", "type": "string (nullable)", "editable": false, "description": "Required if Safeguarded: IBAN or internal bank account ID identifying the client funds account." },
+      { "name": "safeguardedClientFundAccountBank", "type": "string (nullable)", "editable": false, "description": "Required if Safeguarded: the bank holding the safeguarded client funds." },
+      { "name": "accountRole", "type": "enum roleName", "editable": false, "description": "Functional purpose of the account; tied to owner type (extensible list)." },
+      { "name": "status", "type": "enum status", "editable": false, "description": "Active or Closed." },
+      { "name": "createdAt", "type": "datetime", "editable": false, "description": "When the account was created." },
+      { "name": "closedAt", "type": "datetime (nullable)", "editable": false, "description": "When the account was closed." }
+    ]
+  },
+
+  "safeguardedRoles": [
+    "MerchantReserve",
+    "MerchantPending",
+    "MerchantAvailable",
+    "BankSafeguarded",
+    "BankSafeguardedClearing"
+  ],
+
+  "ownerTypes": [
+    {
+      "ownerType": "Entity",
+      "createdPer": "entity + settlement currency",
+      "automation": "When an internal user adds a settlement currency to an entity, all relevant entity accounts are created automatically for that currency.",
+      "license": "Inherits the entity's license (Paytently PI Ltd or Paytently Ltd).",
+      "variants": [
+        {
+          "safeguarded": true,
+          "accountClass": "Safeguarded",
+          "requiresSafeguardedConfiguration": true,
+          "note": "Only allowed for entities whose license permits safeguarding.",
+          "roles": ["MerchantPending", "MerchantAvailable", "MerchantReserve"]
+        },
+        {
+          "safeguarded": false,
+          "accountClass": "NotSafeguarded",
+          "inSpec": false,
+          "note": "Non-safeguarded entity variant (implemented in code only).",
+          "roles": ["MerchantClearing"]
+        }
+      ]
+    },
+    {
+      "ownerType": "Channel",
+      "createdPer": "channel + settlement currency",
+      "automation": "System creates channel accounts for newly onboarded channels for all relevant currencies.",
+      "license": null,
+      "variants": [
+        {
+          "safeguarded": false,
+          "accountClass": "NotSafeguarded",
+          "roles": ["ChannelClearing", "FeesPayableChannel", "ChannelClearingTransactions", "ChannelClearingFees"]
+        }
+      ]
+    },
+    {
+      "ownerType": "Connector",
+      "createdPer": "connector + settlement currency",
+      "automation": "System creates connector accounts for newly onboarded connectors for all relevant currencies. Only used for connectors that differ from the channel.",
+      "license": null,
+      "variants": [
+        {
+          "safeguarded": false,
+          "accountClass": "NotSafeguarded",
+          "roles": ["FeesPayableConnector"]
+        }
+      ]
+    },
+    {
+      "ownerType": "Introducer",
+      "createdPer": "introducer + settlement currency",
+      "automation": "System creates an introducer payable account for each individual introducer for each relevant currency.",
+      "license": null,
+      "variants": [
+        {
+          "safeguarded": false,
+          "accountClass": "NotSafeguarded",
+          "roles": ["FeesPayableIntroducer"]
+        }
+      ]
+    },
+    {
+      "ownerType": "Paytently",
+      "createdPer": "settlement currency (non-safeguarded) or safeguarded client fund account (safeguarded)",
+      "automation": "Paytently accounts are created when a new settlement currency or a new safeguarded client fund account is added.",
+      "license": null,
+      "ownerId": "paytently",
+      "variants": [
+        {
+          "safeguarded": false,
+          "accountClass": "NotSafeguarded",
+          "scope": "per settlement currency",
+          "roles": ["FeesPayablePaytentlyPiLtd", "FeesPayablePaytentlyLtd", "BankOperating", "Revenue", "ReconSuspense", "AdjustmentSuspense"]
+        },
+        {
+          "safeguarded": true,
+          "accountClass": "Safeguarded",
+          "requiresSafeguardedConfiguration": true,
+          "scope": "per safeguarded client fund account",
+          "roles": ["BankSafeguarded", "BankSafeguardedClearing"]
+        }
+      ]
+    }
+  ],
+
+  "roles": [
+    {
+      "name": "MerchantReserve",
+      "snakeName": "merchant_reserve",
+      "ownerType": "Entity",
+      "accountType": "Liability",
+      "accountClass": "Safeguarded",
+      "inSpec": true,
+      "description": "Holds funds belonging to the merchant that are contractually restricted as a reserve, typically used to cover risk-related obligations."
+    },
+    {
+      "name": "MerchantPending",
+      "snakeName": "merchant_pending",
+      "ownerType": "Entity",
+      "accountType": "Liability",
+      "accountClass": "Safeguarded",
+      "inSpec": true,
+      "description": "Funds recognised as owed to the merchant but not yet available for use, typically because settlement, reconciliation or risk conditions have not yet been completed."
+    },
+    {
+      "name": "MerchantAvailable",
+      "snakeName": "merchant_available",
+      "ownerType": "Entity",
+      "accountType": "Liability",
+      "accountClass": "Safeguarded",
+      "inSpec": true,
+      "description": "Funds owed to the merchant that are available for payout to the merchant's bank account, subject to the merchant's agreed settlement rules."
+    },
+    {
+      "name": "MerchantClearing",
+      "snakeName": "merchant_clearing",
+      "ownerType": "Entity",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": false,
+      "description": "Clearing account for a non-safeguarded entity (implemented in the accounts-api code model only; not enumerated in the business spec)."
+    },
+    {
+      "name": "ChannelClearing",
+      "snakeName": "channel_clearing",
+      "ownerType": "Channel",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Amounts owed to Paytently by the Channel for recognised transactions that have not yet been settled in cash. (We are the Channel's merchant of record, so they owe this to us; ultimately we owe it upstream.)"
+    },
+    {
+      "name": "FeesPayableChannel",
+      "snakeName": "fees_payable_channel",
+      "ownerType": "Channel",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Fees owed by Paytently to the Channel, for commission accrued based on processed transactions, settlement costs and other fees per the agreed commercial terms."
+    },
+    {
+      "name": "ChannelClearingTransactions",
+      "snakeName": "channel_clearing_transactions",
+      "ownerType": "Channel",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": false,
+      "description": "Transactions component of channel clearing (implemented in the accounts-api code model only)."
+    },
+    {
+      "name": "ChannelClearingFees",
+      "snakeName": "channel_clearing_fees",
+      "ownerType": "Channel",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": false,
+      "description": "Fees component of channel clearing (implemented in the accounts-api code model only)."
+    },
+    {
+      "name": "FeesPayableConnector",
+      "snakeName": "fees_payable_connector",
+      "ownerType": "Connector",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Money Paytently owes to the extended gateway that operates between us and the channel (e.g. Akurateco, Paytech, Pagora). Only used for connectors that differ from the channel."
+    },
+    {
+      "name": "FeesPayableIntroducer",
+      "snakeName": "fees_payable_introducer",
+      "ownerType": "Introducer",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Money Paytently owes to an introducer for introducing or supporting merchants, paid out in line with the agreed terms."
+    },
+    {
+      "name": "FeesPayablePaytentlyPiLtd",
+      "snakeName": "fees_payable_paytently_pi_ltd",
+      "ownerType": "Paytently",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "license": "Paytently PI Ltd",
+      "description": "Fees owed to Paytently (PI Ltd license) that have accrued on processed transactions but are still held within safeguarded funds and not yet transferred to Paytently's operating account. (Spec role 'Fees payable Paytently', split per license in code.)"
+    },
+    {
+      "name": "FeesPayablePaytentlyLtd",
+      "snakeName": "fees_payable_paytently_ltd",
+      "ownerType": "Paytently",
+      "accountType": "Liability",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "license": "Paytently Ltd",
+      "description": "Fees owed to Paytently (Ltd license) that have accrued on processed transactions but are still held within safeguarded funds and not yet transferred to Paytently's operating account. (Spec role 'Fees payable Paytently', split per license in code.)"
+    },
+    {
+      "name": "BankOperating",
+      "snakeName": "bank_operating",
+      "ownerType": "Paytently",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Cash held by Paytently in its operating bank accounts and available for unrestricted business use."
+    },
+    {
+      "name": "Revenue",
+      "snakeName": "revenue",
+      "ownerType": "Paytently",
+      "accountType": "Revenue",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Money earned by Paytently for providing its services. Reflects value generated over time, separate from any funds held or moved on behalf of merchants."
+    },
+    {
+      "name": "ReconSuspense",
+      "snakeName": "recon_suspense",
+      "ownerType": "Paytently",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Temporary balances used to hold unresolved differences identified during reconciliation, cleared once the discrepancy is investigated and resolved."
+    },
+    {
+      "name": "AdjustmentSuspense",
+      "snakeName": "adjustment_suspense",
+      "ownerType": "Paytently",
+      "accountType": "Asset",
+      "accountClass": "NotSafeguarded",
+      "inSpec": true,
+      "description": "Temporary balancing account to record deliberate manual corrections to ledger balances while keeping entries balanced. Must be cleared once the underlying issue is fully corrected and explained."
+    },
+    {
+      "name": "BankSafeguardedClearing",
+      "snakeName": "bank_safeguarded_clearing",
+      "ownerType": "Paytently",
+      "accountType": "Asset",
+      "accountClass": "Safeguarded",
+      "inSpec": true,
+      "description": "Safeguarded funds in transit or awaiting confirmation/reconciliation with the bank, prior to being recognised as confirmed safeguarded bank balances."
+    },
+    {
+      "name": "BankSafeguarded",
+      "snakeName": "bank_safeguarded",
+      "ownerType": "Paytently",
+      "accountType": "Asset",
+      "accountClass": "Safeguarded",
+      "inSpec": true,
+      "description": "Cash held by Paytently in safeguarded bank accounts, subject to safeguarding restrictions and held on behalf of merchants and other entitled parties."
+    }
+  ],
+
+  "rules": {
+    "immutability": "All account data is immutable after creation except the human-readable account name. Account identifiers cannot be reused, even if the account is closed.",
+    "close": [
+      "Accounts can only be closed if the balance is 0.",
+      "Closed accounts cannot be reopened.",
+      "A closed account cannot be used as the debit or credit account in any ledger movement.",
+      "Entity Merchant Pending / Merchant Available / Merchant Reserve for a settlement currency must be closed together as a set.",
+      "Entity accounts cannot be closed while associated with one or more active routes."
+    ],
+    "routeAssignment": "An entity single-currency account set (Merchant Reserve / Pending / Available) may be assigned to a route. Once assigned it cannot be changed; one account set can serve multiple routes. Routes remain operational without an account until one is assigned.",
+    "safeguardedConfiguration": "Safeguarded accounts require a SafeguardedAccountConfiguration { identifier, bank }; non-safeguarded accounts must not have one."
+  },
+
+  "createRequestExample": {
+    "endpoint": "POST accounts (finops-accounts-api)",
+    "body": {
+      "owner_type": "entity",
+      "owner_id": "ent_123",
+      "name": "Transactworld Ltd EUR",
+      "currency": "EUR",
+      "safeguarded": true,
+      "safeguarded_account_configuration": {
+        "identifier": "GB00XXXX00000000000000",
+        "bank": "Example Safeguarding Bank"
+      }
+    },
+    "note": "Enums are serialised snake_case. The created account exposes the role set for (owner_type, safeguarded) shown in ownerTypes[].variants[].roles."
+  }
+}
